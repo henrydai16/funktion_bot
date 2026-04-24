@@ -67,7 +67,7 @@ class Events(commands.Cog):
                 return
         
         #2 RANDOM ROAST if no trigger words are detected.
-        if random.random() < 0.99: # 1% chance to randomly reply to ANY message
+        if random.random() < 0.01: # 1% chance to randomly reply to ANY message
             now = time.time()
             key = message.channel.id
             last = self.last_roast_time.get(key, 0)
