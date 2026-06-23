@@ -236,7 +236,8 @@ class Ask(commands.Cog):
         - LLM reasoning (Ollama)
         """
 
-        model = "qwen3:14b"
+        # model = "qwen3:14b"
+        model = "phi3:mini"
 
         system_prompt = """
         You are a helpful assistant for FunKtion (University of Michigan dance team).
