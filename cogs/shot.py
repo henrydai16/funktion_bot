@@ -12,6 +12,12 @@ class RolePower(IntEnum):
     TWEENIE = 2
     NEWBIE = 1
 
+class roleIDs(IntEnum):
+    ALUM_ID = 953499388351750144
+    OLDIE_ID = 953499007408308224 
+    TWEENIE_ID = 953498912411500574 
+    NEWBIE_ID = 953498765694730281
+
 # https://guide.pycord.dev/popular-topics/cogs
 class Shot(commands.Cog):
     def __init__(self, bot): # Calls when loading cog
@@ -37,7 +43,11 @@ class Shot(commands.Cog):
         ),
         signature =""
     )
-    async def shot(self, ctx, member: discord.Member = None, amount: int = None) -> None:
+    async def shot(self,
+                   ctx: Context,
+                   member: discord.Member = None,
+                   amount: int = None
+                ) -> None:
         """
         Assigns a number of 'shots' to a user and stores the total in persistent JSON.
         """
@@ -70,21 +80,25 @@ class Shot(commands.Cog):
         if amount is None:
             amount = 1
 
-        # Reward user since they're receiving < 0 shots.
-        if amount < 0:
-            await self.reward(ctx, member, amount)
+        allowed, new_amount, message = await self.can_give_shot(
+            ctx,
+            ctx_author_hi_role,
+            member_hi_role,
+            amount
+        )
+
+        if allowed:
+            # Reward user since they're receiving < 0 shots.
+            if amount < 0:
+                await self.reward(ctx, member, amount)
+            
+            # Punish user for receiving > 0 shots.
+            else:
+                await self.update_shots(ctx, member, amount)
         
-        # Punish user for receiving > 0 shots.
+        # User is punished, NOT allowed to give shots (checks if <0 via amount)
         else:
-            values = self.bot.user_values
-            uid = str(member.id)
-
-            # Update json score if user_values is missing
-            new_shot_count = values.get(uid, 0) + amount
-            values[uid] = new_shot_count
-            save_values(values)
-
-            await ctx.send(f"{member.mention} now has **{values[uid]}** shots. Be better.")
+            await self.update_shots(ctx, member, amount)
 
 
     async def reward(self, ctx, member: discord.Member = None, amount: int = 1) -> None:
@@ -92,32 +106,46 @@ class Shot(commands.Cog):
         Removes (rewards) a number of 'shots' from a user and updates json.
         Originally it's own command, now integrated with !shot if the value is < 0.
         """
-
         member = member or ctx.author
+        # Amount should be negative already 
+        await self.update_shots(ctx, member, amount)
+        
+    async def update_shots(self, ctx, member: discord.Member, amount: int) -> int:
+        """
+        Updates the shot count for a member and sends a message.
+        Returns the new shot count.
+        """
+
         values = self.bot.user_values
         uid = str(member.id)
 
-        # Calculate new_shot_count w/ subtraction (not adding negatives) 
-        amount = abs(amount) 
-        new_shot_count = values.get(uid, 0) - amount
+        new_shot_count = values.get(uid, 0) + amount
         values[uid] = new_shot_count
         save_values(values)
 
-        await ctx.send(
-            f"{member.mention} has been rewarded. "
-            f"They now have **{values[uid]}** shots. *Maybe* you will make it to another dmix."
+        # Message differs depending on positive or negative update
+        if amount >= 0:
+            msg = f"{member.mention} now has **{new_shot_count}** shots. Be better."
+        else:
+            msg = (
+                f"{member.mention} has been rewarded. "
+                f"They now have **{new_shot_count}** shots. *Maybe* you will make it to another dmix.*"
             )
-        
+
+        await ctx.send(msg)
+        return new_shot_count
+
+
     def get_highest_user_role(self, member: discord.Member):
         """
         Given a member, return the highest hierarchal discord.Role ranging from:
         Alumni → Oldie → Tweenie → Newbie
         """
         priority_ids = [
-            953499388351750144, # alum
-            953499007408308224, # oldie
-            953498912411500574, # tweenie
-            953498765694730281, # newbie
+            roleIDs.ALUM_ID,
+            roleIDs.OLDIE_ID,
+            roleIDs.TWEENIE_ID,
+            roleIDs.NEWBIE_ID
         ]
 
         for pid in priority_ids:
@@ -127,8 +155,12 @@ class Shot(commands.Cog):
         # If no ID found, default to Newbie status.
         return next((role for role in member.guild.roles if role.id == priority_ids[-1]), None)
     
-    def can_give_shot(self, author_role: discord.Role, member_role: discord.Role,
-                       amount: int) -> tuple[bool, int]:
+    async def can_give_shot(self,
+                            ctx: Context,
+                            author_role: discord.Role,
+                            member_role: discord.Role,
+                            amount: int
+                            ) -> tuple[bool, int, str]:
         """
         Given an author role and a member role, returns a tuple on whether or not
         they will be able to give a shot. 
@@ -153,26 +185,35 @@ class Shot(commands.Cog):
 
         # If tweenie detected, see if member is oldie or newbie:
         elif author_power == RolePower.TWEENIE:
-
-            # Trying to give a shot to oldie is not allowed.
-            if member_power == RolePower.OLDIE:
-                return False
-            
-            # Use "shot pass" on another tweenie/newbie (refreshes every 7d?) 
-            else: 
-
-                # check_shot_pass()
-                return True
-
+            can_give_shot, updated_amt, return_msg = tweenie_give_shot(
+                author_power,
+                member_power,
+                amount)
+            await ctx.send(f"{ctx.author.mention}\n"
+                           f"{return_msg}")
+            return tuple(can_give_shot, updated_amt)
         # newbies will be deceived into using the one time pass
         else: # author_power == RolePower.NEWBIE
 
 
-    def tweenie_give_shot(self, author_role: discord.Role):
+    def tweenie_give_shot(self, author_power: int,member_power: int, 
+                          amount: int) -> tuple(bool, int, str):
         """
         Verifies if tweenie is able to give a shot. If a shot pass is present,
         they will be prompted if they want to use it.
         """
+        # Trying to give a shot to oldie is not allowed.
+        if member_power == RolePower.OLDIE:
+            return tuple(False,
+                          amount * 2,
+                          "A tweenie giving a shot to an oldie? How dare you." \
+                          " Shots on you are returned & doubled. Be better.")
+        
+        # Use "shot pass" on another tweenie/newbie (refreshes every 7d?) 
+        else: 
+
+            # check_shot_pass()
+            return True
 
 
 async def setup(bot):
